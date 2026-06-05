@@ -1,6 +1,6 @@
 <div align="center">
 
-  <img src="icon_4k.png" alt="Frontend Snipper Logo" width="500" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0, 242, 254, 0.3); margin-bottom: 20px;" />
+  <img src="icon_4k.png" alt="Frontend Snipper Logo" width="300" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0, 242, 254, 0.3); margin-bottom: 20px;" />
 
   # ⚡ Frontend Snipper
 
