@@ -108,6 +108,6 @@ Frontend Snipper launches a synchronous, sandboxed `iframe` to check **pure, cle
 ---
 
 <div align="center">
-  <sub>Built with ❤️ for front-end developers and designers.</sub>
+  <sub>Built by Prithwiraj Das with ❤️ for front-end developers and designers.</sub>
 </div>
-#
+
