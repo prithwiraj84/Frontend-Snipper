@@ -927,11 +927,17 @@
     }
   };
 
-  // Listen to toggle messages from background.js
-  chrome.runtime.onMessage.addListener((message) => {
-    if (message.action === 'toggleSidePanel') {
+  // Listen to toggle messages from background.js. Registration is idempotent: if this script is
+  // ever injected again into the same document (e.g. an on-demand inject), remove the previous
+  // listener first so the panel can't end up with two handlers that toggle each other.
+  if (window.__frontendSnipperMsgListener) {
+    try { chrome.runtime.onMessage.removeListener(window.__frontendSnipperMsgListener); } catch (e) {}
+  }
+  window.__frontendSnipperMsgListener = (message) => {
+    if (message && message.action === 'toggleSidePanel') {
       toggleSidebar();
     }
-  });
+  };
+  chrome.runtime.onMessage.addListener(window.__frontendSnipperMsgListener);
 
 })();

@@ -11,15 +11,39 @@ function flashBadge(tabId, text, color) {
   } catch (e) {}
 }
 
-// Toggle the side panel when the extension toolbar action icon is clicked
-chrome.action.onClicked.addListener((tab) => {
-  if (tab.id) {
-    chrome.tabs.sendMessage(tab.id, { action: "toggleSidePanel" }).catch((err) => {
-      // Content script isn't injected on restricted pages (chrome://, the Web Store,
-      // view-source:, the new-tab page, other extensions). Surface that instead of failing silently.
-      console.warn("Frontend Snipper can't run on this page:", err && err.message ? err.message : err);
-      flashBadge(tab.id, "—", "#71717A");
-    });
+// The content-script bundle, mirrored from manifest.json content_scripts so we can inject it
+// on demand when a tab predates the (re)loaded extension.
+const CONTENT_JS = ["libs/jszip.min.js", "content/ui.js", "content/snipper.js"];
+const CONTENT_CSS = ["content/theme.css"];
+
+// Toggle the panel. First try to message an already-present content script (preserves panel
+// state). If it isn't reachable — the classic case where the extension was reloaded but the tab
+// wasn't, or static injection raced — inject the scripts on demand and retry. Only genuinely
+// restricted pages (chrome://, the Web Store, view-source:, the new-tab page) can't be injected.
+chrome.action.onClicked.addListener(async (tab) => {
+  if (!tab || !tab.id) return;
+
+  try {
+    await chrome.tabs.sendMessage(tab.id, { action: "toggleSidePanel" });
+    return; // content script was present and handled it
+  } catch (err) {
+    // Not reachable — fall through to on-demand injection.
+  }
+
+  try {
+    // CSS first (best-effort; harmless if already applied), then the JS bundle.
+    try {
+      await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: CONTENT_CSS });
+    } catch (cssErr) { /* may already be present */ }
+
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: CONTENT_JS });
+
+    // executeScript resolves after the scripts finish running, so the message listener is now
+    // registered. Retry the toggle.
+    await chrome.tabs.sendMessage(tab.id, { action: "toggleSidePanel" });
+  } catch (injectErr) {
+    console.warn("Frontend Snipper can't run on this page:", injectErr && injectErr.message ? injectErr.message : injectErr);
+    flashBadge(tab.id, "—", "#71717A");
   }
 });
 
