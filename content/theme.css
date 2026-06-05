@@ -1,0 +1,57 @@
+/* CSS injected directly into the host page context */
+
+/* Injected Side Panel Root Container */
+#frontend-snipper-sidebar-root {
+  position: fixed !important;
+  top: 0 !important;
+  right: -420px !important; /* Offscreen by default */
+  width: 400px !important;
+  height: 100vh !important;
+  z-index: 2147483647 !important; /* On top of all host page elements */
+  box-shadow: -15px 0 45px rgba(0, 0, 0, 0.5) !important;
+  transition: right 0.4s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  background: transparent !important;
+  border: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  display: block !important;
+  box-sizing: border-box !important;
+  color-scheme: dark !important;
+}
+
+#frontend-snipper-sidebar-root.visible {
+  right: 0 !important; /* Slide in */
+}
+
+@keyframes fsOutlinePulse {
+  0% {
+    outline-color: rgba(0, 229, 255, 0.5);
+    box-shadow: inset 0 0 4px rgba(0, 229, 255, 0.15);
+  }
+  50% {
+    outline-color: rgba(0, 229, 255, 1);
+    box-shadow: inset 0 0 10px rgba(0, 229, 255, 0.35);
+  }
+  100% {
+    outline-color: rgba(0, 229, 255, 0.5);
+    box-shadow: inset 0 0 4px rgba(0, 229, 255, 0.15);
+  }
+}
+
+/* Hover outline style for target page elements */
+.frontend-snipper-hovered {
+  outline: 2px dashed #00E5FF !important;
+  outline-offset: -2px !important;
+  cursor: crosshair !important;
+  animation: fsOutlinePulse 1.6s infinite ease-in-out !important;
+  transition: outline 0.15s ease-in-out, box-shadow 0.15s ease-in-out !important;
+}
+
+/* Prevent text selection and hover actions while inspecting elements */
+body.frontend-snipper-inspecting {
+  cursor: crosshair !important;
+}
+body.frontend-snipper-inspecting a,
+body.frontend-snipper-inspecting button {
+  pointer-events: none !important; /* Disable clicks on links/buttons when inspecting */
+}
