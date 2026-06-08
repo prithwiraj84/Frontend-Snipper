@@ -1,13 +1,16 @@
 {
   "manifest_version": 3,
   "name": "Frontend Snipper",
-  "version": "1.0.0",
-  "description": "Snip any DOM element along with its exact computed CSS and download it as a ZIP archive.",
+  "version": "2.0.0",
+  "description": "Snip any DOM element with pixel-perfect computed CSS, fonts, keyframes and embedded assets, then download it as a self-contained ZIP archive.",
   "author": "Prithwiraj",
   "permissions": [
     "activeTab",
     "scripting",
     "downloads"
+  ],
+  "host_permissions": [
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"
