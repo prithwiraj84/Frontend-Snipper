@@ -283,6 +283,9 @@
         const formattedCss = authoredCss.trim() ? authoredCss : "/* No author stylesheets were found on this page. */";
         const childCount = bodyClone.querySelectorAll("*").length;
 
+        // Locator details (XPath / CSS selector / id / attributes) for the captured element.
+        const selectorDetails = gatherSelectorDetails(target);
+
         lastSnipContext = {
           markers: markers,
           htmlAttrs: htmlAttrs,
@@ -290,7 +293,7 @@
         };
 
         if (window.FrontendSnipperUI) {
-          window.FrontendSnipperUI.updatePreview(formattedHtml, formattedCss, target.tagName, childCount);
+          window.FrontendSnipperUI.updatePreview(formattedHtml, formattedCss, target.tagName, childCount, selectorDetails);
         }
       } catch (err) {
         console.error("Frontend Snipper: extraction failed:", err);
@@ -298,6 +301,389 @@
         alert("Snipping process failed: " + err.message);
       }
     }, 50);
+  }
+
+  // -------- Selector / locator details (XPath, CSS, id, attributes) --------
+
+  function cssEsc(s) {
+    if (window.CSS && CSS.escape) return CSS.escape(s);
+    return String(s).replace(/[^a-zA-Z0-9_-]/g, (c) => "\\" + c);
+  }
+
+  // Quote a string for an XPath literal, handling embedded quotes.
+  function xpathLiteral(s) {
+    s = String(s);
+    if (s.indexOf("'") === -1) return "'" + s + "'";
+    if (s.indexOf('"') === -1) return '"' + s + '"';
+    return "concat('" + s.split("'").join("',\"'\",'") + "')";
+  }
+
+  // Serialize a value as a CSS double-quoted string (CSS escaping rules, NOT JSON — they
+  // differ for control characters, which JSON would emit as invalid \uXXXX).
+  function cssString(v) {
+    var BS = String.fromCharCode(92); // backslash, kept out of source to avoid escaping
+    var s = String(v), out = '"';
+    for (var i = 0; i < s.length; i++) {
+      var ch = s[i], code = s.charCodeAt(i);
+      if (ch === '"' || code === 92) out += BS + ch;
+      else if (code < 0x20 || code === 0x7f) out += BS + code.toString(16) + ' ';
+      else out += ch;
+    }
+    return out + '"';
+  }
+
+  // Serialize a value as a double-quoted code string literal valid in both Python and Java
+  // (escapes backslash, double-quote, and newline/CR/tab).
+  function codeStringDouble(v) {
+    var BS = String.fromCharCode(92);
+    var s = String(v), out = '"';
+    for (var i = 0; i < s.length; i++) {
+      var ch = s[i], code = s.charCodeAt(i);
+      if (ch === '"' || code === 92) out += BS + ch;
+      else if (code === 10) out += BS + "n";
+      else if (code === 13) out += BS + "r";
+      else if (code === 9) out += BS + "t";
+      else out += ch;
+    }
+    return out + '"';
+  }
+
+  function isUniqueSelector(selector) {
+    try { return document.querySelectorAll(selector).length === 1; } catch (e) { return false; }
+  }
+
+  // 1-based index of an element among same-tag siblings.
+  function sameTagIndex(el) {
+    let i = 1, sib = el.previousElementSibling;
+    while (sib) { if (sib.nodeName === el.nodeName) i++; sib = sib.previousElementSibling; }
+    return i;
+  }
+
+  function cleanClasses(el) {
+    if (!el.classList || !el.classList.length) return [];
+    return Array.from(el.classList).filter((c) => c.indexOf("frontend-snipper") === -1);
+  }
+
+  function isHtmlElement(el) {
+    const ns = el.namespaceURI;
+    return !ns || ns === "http://www.w3.org/1999/xhtml";
+  }
+
+  // Local name, correctly cased: lowercase for HTML, original case for SVG/MathML
+  // (foreign elements match case-SENSITIVELY, so <clipPath> must stay "clipPath").
+  function localName(el) {
+    return el.localName || el.nodeName.toLowerCase();
+  }
+
+  // Tag token for a CSS selector (escaped for safety).
+  function cssTag(el) {
+    return cssEsc(localName(el));
+  }
+
+  // One XPath step. HTML elements use a plain name test; foreign (SVG/MathML) elements use a
+  // namespace-robust local-name() test because XPath name tests are namespace/case-sensitive.
+  function xpathStep(el) {
+    const idx = sameTagIndex(el);
+    if (isHtmlElement(el)) return localName(el) + "[" + idx + "]";
+    return "*[local-name()=" + xpathLiteral(localName(el)) + "][" + idx + "]";
+  }
+
+  function getAbsoluteXPath(el) {
+    if (!el || el.nodeType !== 1) return "";
+    const parts = [];
+    let node = el;
+    while (node && node.nodeType === 1) {
+      parts.unshift(xpathStep(node));
+      node = node.parentElement;
+    }
+    return "/" + parts.join("/");
+  }
+
+  // Shortest practical XPath: anchored on the nearest ancestor (or self) with a unique id.
+  function getSmartXPath(el) {
+    if (!el || el.nodeType !== 1) return "";
+    const segs = [];
+    let node = el;
+    while (node && node.nodeType === 1) {
+      const id = node.getAttribute && node.getAttribute("id");
+      if (id && isUniqueSelector("#" + cssEsc(id))) {
+        segs.unshift("//*[@id=" + xpathLiteral(id) + "]");
+        let out = segs[0];
+        for (let i = 1; i < segs.length; i++) out += "/" + segs[i];
+        return out;
+      }
+      segs.unshift(xpathStep(node));
+      node = node.parentElement;
+    }
+    return "/" + segs.join("/");
+  }
+
+  // Full descendant CSS path with :nth-of-type, anchored at the nearest unique id.
+  function getFullCssPath(el) {
+    if (!el || el.nodeType !== 1) return "";
+    const parts = [];
+    let node = el;
+    while (node && node.nodeType === 1 && localName(node) !== "html") {
+      const id = node.getAttribute("id");
+      if (id && isUniqueSelector("#" + cssEsc(id))) {
+        parts.unshift("#" + cssEsc(id));
+        break;
+      }
+      parts.unshift(cssTag(node) + ":nth-of-type(" + sameTagIndex(node) + ")");
+      node = node.parentElement;
+    }
+    return parts.join(" > ");
+  }
+
+  // The shortest selector that uniquely identifies the element (id > test-attr > class > path).
+  function getBestCssSelector(el) {
+    if (!el || el.nodeType !== 1) return "";
+    const tag = cssTag(el);
+
+    const id = el.getAttribute("id");
+    if (id && isUniqueSelector("#" + cssEsc(id))) return "#" + cssEsc(id);
+
+    const testAttrs = ["data-testid", "data-test", "data-cy", "data-qa", "name", "aria-label"];
+    for (let i = 0; i < testAttrs.length; i++) {
+      const a = testAttrs[i];
+      const v = el.getAttribute(a);
+      if (v) {
+        const attrSel = "[" + a + "=" + cssString(v) + "]";
+        if (isUniqueSelector(tag + attrSel)) return tag + attrSel;
+        if (isUniqueSelector(attrSel)) return attrSel;
+      }
+    }
+
+    const classes = cleanClasses(el).map(cssEsc);
+    if (classes.length) {
+      const classSel = tag + "." + classes.join(".");
+      if (isUniqueSelector(classSel)) return classSel;
+    }
+
+    return getFullCssPath(el);
+  }
+
+  // Lightweight `tag#id.class` descriptor for the live hover tooltip.
+  function getElementDescriptor(el) {
+    if (!el || el.nodeType !== 1) return "";
+    let s = localName(el);
+    const id = el.getAttribute("id");
+    if (id) s += "#" + id;
+    const cls = cleanClasses(el).slice(0, 4);
+    if (cls.length) s += "." + cls.join(".");
+    return s;
+  }
+
+  // XPath name test: plain name for HTML, namespace-robust local-name() for foreign elements.
+  function xpathNameTest(el) {
+    return isHtmlElement(el) ? localName(el) : "*[local-name()=" + xpathLiteral(localName(el)) + "]";
+  }
+
+  function xpathMatchCount(xp) {
+    try {
+      return document.evaluate(xp, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null).snapshotLength;
+    } catch (e) { return -1; }
+  }
+  function isUniqueXPath(xp) { return xpathMatchCount(xp) === 1; }
+  function xpathFirstMatch(xp) {
+    try {
+      return document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+    } catch (e) { return null; }
+  }
+
+  function idIsUnique(el) {
+    const id = el.getAttribute("id");
+    return !!(id && isUniqueSelector("#" + cssEsc(id)));
+  }
+
+  // Nearest ancestor (excluding self) that carries an id.
+  function nearestIdAncestor(el) {
+    let node = el.parentElement;
+    while (node && node.nodeType === 1 && node !== document.documentElement) {
+      if (node.id) return node;
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  function getXPathById(el) {
+    const id = el.getAttribute("id");
+    return id ? "//*[@id=" + xpathLiteral(id) + "]" : "";
+  }
+  function getXPathByClass(el) {
+    const cls = el.getAttribute("class");
+    return cls ? "//" + xpathNameTest(el) + "[@class=" + xpathLiteral(cls) + "]" : "";
+  }
+  function getXPathClassContains(el) {
+    const c = cleanClasses(el)[0];
+    return c ? "//" + xpathNameTest(el) + "[contains(concat(' ', normalize-space(@class), ' '), " + xpathLiteral(" " + c + " ") + ")]" : "";
+  }
+  // Build a by-text XPath whose FIRST match is the inspected element. normalize-space() with no
+  // argument tests the whole subtree, so a plain `//div[normalize-space()='X']` can resolve to a
+  // wrapping ancestor first. We prefer a direct-text predicate (won't match pure wrappers) and
+  // only emit a candidate that actually resolves back to this exact element.
+  function buildVerifiedTextXPath(el, contains) {
+    const text = (el.textContent || "").replace(/\s+/g, " ").trim();
+    if (!text) return "";
+    const nt = xpathNameTest(el);
+    const candidates = [];
+    if (contains) {
+      const snippet = text.length > 40 ? text.slice(0, 40) : text;
+      candidates.push("//" + nt + "[text()[contains(normalize-space(), " + xpathLiteral(snippet) + ")]]");
+      candidates.push("//" + nt + "[contains(normalize-space(), " + xpathLiteral(snippet) + ")]");
+    } else {
+      if (text.length > 80) return "";
+      candidates.push("//" + nt + "[text()[normalize-space()=" + xpathLiteral(text) + "]]");
+      candidates.push("//" + nt + "[normalize-space()=" + xpathLiteral(text) + "]");
+    }
+    for (let i = 0; i < candidates.length; i++) {
+      if (xpathFirstMatch(candidates[i]) === el) return candidates[i];
+    }
+    return "";
+  }
+  function getXPathByText(el) { return buildVerifiedTextXPath(el, false); }
+  function getXPathTextContains(el) { return buildVerifiedTextXPath(el, true); }
+  function getXPathByAttr(el, attr) {
+    const v = el.getAttribute(attr);
+    return v != null ? "//" + xpathNameTest(el) + "[@" + attr + "=" + xpathLiteral(v) + "]" : "";
+  }
+
+  // Shortest XPath that resolves to exactly one element (id > test/attr > text > relative).
+  function getShortXPath(el) {
+    if (idIsUnique(el)) return getXPathById(el);
+    const nt = xpathNameTest(el);
+    const tryAttrs = ["data-testid", "data-test", "data-cy", "data-qa", "name", "aria-label", "title", "alt", "placeholder", "href", "type"];
+    for (let i = 0; i < tryAttrs.length; i++) {
+      const v = el.getAttribute(tryAttrs[i]);
+      if (v) {
+        const xp = "//" + nt + "[@" + tryAttrs[i] + "=" + xpathLiteral(v) + "]";
+        if (isUniqueXPath(xp)) return xp;
+      }
+    }
+    const text = (el.textContent || "").replace(/\s+/g, " ").trim();
+    if (text && text.length <= 50) {
+      const xp = "//" + nt + "[normalize-space()=" + xpathLiteral(text) + "]";
+      if (isUniqueXPath(xp)) return xp;
+    }
+    return getSmartXPath(el);
+  }
+
+  function getCssById(el) {
+    const id = el.getAttribute("id");
+    return id ? "#" + cssEsc(id) : "";
+  }
+  function getCssByClass(el) {
+    const classes = cleanClasses(el).map(cssEsc);
+    return classes.length ? cssTag(el) + "." + classes.join(".") : "";
+  }
+  function getCssByAttr(el, attr) {
+    const v = el.getAttribute(attr);
+    return v != null ? cssTag(el) + "[" + attr + "=" + cssString(v) + "]" : "";
+  }
+
+  // Comprehensive, grouped locator details for the Selectors panel tab.
+  // Returns [{ title, rows: [{ label, value }] }] — empty rows/groups are dropped.
+  function gatherSelectorDetails(el) {
+    if (!el || el.nodeType !== 1) return [];
+    const groups = [];
+    const mk = (title) => { const g = { title: title, rows: [] }; groups.push(g); return g; };
+    const add = (g, label, value) => { if (value != null && value !== "") g.rows.push({ label: label, value: String(value) }); };
+
+    let rect = { width: 0, height: 0, left: 0, top: 0 };
+    try { rect = el.getBoundingClientRect(); } catch (e) {}
+    const text = (el.textContent || "").replace(/\s+/g, " ").trim();
+
+    // Element overview
+    const gEl = mk("Element");
+    add(gEl, "Tag", localName(el));
+    const cls = cleanClasses(el);
+    if (cls.length) add(gEl, "Classes", cls.join(" "));
+    if (text) add(gEl, "Text", text.length > 200 ? text.slice(0, 200) + "…" : text);
+    add(gEl, "Size", Math.round(rect.width) + " × " + Math.round(rect.height) + " px");
+    add(gEl, "Position", "x: " + Math.round(rect.left + (window.scrollX || 0)) + ", y: " + Math.round(rect.top + (window.scrollY || 0)));
+    add(gEl, "Child elements", el.querySelectorAll ? el.querySelectorAll("*").length : 0);
+
+    // ID details
+    const id = el.getAttribute("id");
+    const gId = mk("ID");
+    if (id) {
+      add(gId, "ID", id);
+      add(gId, "ID is unique on page", idIsUnique(el) ? "Yes" : "No (" + document.querySelectorAll("[id=" + cssString(id) + "]").length + " matches)");
+      add(gId, "CSS by ID", getCssById(el));
+      add(gId, "XPath by ID", getXPathById(el));
+    } else {
+      add(gId, "ID", "(none on this element)");
+    }
+    const idAnc = nearestIdAncestor(el);
+    if (idAnc) {
+      add(gId, "Nearest ancestor with ID", localName(idAnc) + "#" + idAnc.id);
+      add(gId, "Ancestor ID anchor (XPath)", "//*[@id=" + xpathLiteral(idAnc.id) + "]");
+    }
+
+    // Compute the path-style locators once and reuse for every row below.
+    const bestCss = getBestCssSelector(el);
+    const fullCssPath = getFullCssPath(el);
+    const shortXPath = getShortXPath(el);
+    const smartXPath = getSmartXPath(el);
+    const absXPath = getAbsoluteXPath(el);
+
+    // CSS selectors
+    const gCss = mk("CSS Selectors");
+    add(gCss, "Best (unique)", bestCss);
+    add(gCss, "By ID", getCssById(el));
+    add(gCss, "By class", getCssByClass(el));
+    ["name", "data-testid", "aria-label", "type", "placeholder"].forEach((a) => add(gCss, "By @" + a, getCssByAttr(el, a)));
+    add(gCss, "Full path", fullCssPath);
+
+    // XPath — all common strategies
+    const gXp = mk("XPath");
+    add(gXp, "By ID", getXPathById(el));
+    add(gXp, "Short (unique)", shortXPath);
+    add(gXp, "Relative", smartXPath);
+    add(gXp, "Absolute", absXPath);
+    add(gXp, "By class (exact)", getXPathByClass(el));
+    add(gXp, "By class (contains)", getXPathClassContains(el));
+    add(gXp, "By text (exact)", getXPathByText(el));
+    add(gXp, "By text (contains)", getXPathTextContains(el));
+    ["name", "data-testid", "aria-label", "title", "placeholder", "type", "href", "alt", "value", "for", "role"].forEach((a) => add(gXp, "By @" + a, getXPathByAttr(el, a)));
+
+    // Selenium locators (Python + Java) for every applicable By strategy.
+    // [ label, Python By constant, Java By method, value ]
+    const locators = [];
+    const idVal = el.getAttribute("id");
+    if (idVal) locators.push(["By ID", "By.ID", "id", idVal]);
+    const nameVal = el.getAttribute("name");
+    if (nameVal) locators.push(["By name", "By.NAME", "name", nameVal]);
+    const firstClass = cleanClasses(el)[0];
+    if (firstClass) locators.push(["By class name", "By.CLASS_NAME", "className", firstClass]);
+    locators.push(["By tag name", "By.TAG_NAME", "tagName", localName(el)]);
+    if (bestCss) locators.push(["By CSS selector", "By.CSS_SELECTOR", "cssSelector", bestCss]);
+    if (shortXPath) locators.push(["By XPath (short)", "By.XPATH", "xpath", shortXPath]);
+    locators.push(["By XPath (relative)", "By.XPATH", "xpath", smartXPath]);
+    locators.push(["By XPath (absolute)", "By.XPATH", "xpath", absXPath]);
+    if (isHtmlElement(el) && localName(el) === "a" && text) {
+      locators.push(["By link text", "By.LINK_TEXT", "linkText", text]);
+      locators.push(["By partial link text", "By.PARTIAL_LINK_TEXT", "partialLinkText", text.length > 30 ? text.slice(0, 30) : text]);
+    }
+
+    const gPy = mk("Selenium (Python)");
+    locators.forEach((l) => add(gPy, l[0], "driver.find_element(" + l[1] + ", " + codeStringDouble(l[3]) + ")"));
+
+    const gJava = mk("Selenium (Java)");
+    locators.forEach((l) => add(gJava, l[0], "driver.findElement(By." + l[2] + "(" + codeStringDouble(l[3]) + "))"));
+
+    // Every attribute on the element
+    const gAttr = mk("Attributes");
+    if (el.attributes) {
+      for (let i = 0; i < el.attributes.length; i++) {
+        const at = el.attributes[i];
+        if (at.name === "data-snip-id") continue;
+        add(gAttr, at.name, at.value === "" ? "(empty)" : at.value);
+      }
+    }
+    if (!gAttr.rows.length) add(gAttr, "—", "(no attributes)");
+
+    return groups.filter((g) => g.rows.length);
   }
 
   // -------- Inspect mode --------
@@ -317,19 +703,36 @@
     const target = event.target;
     if (target.closest("#frontend-snipper-sidebar-root")) {
       if (hoveredElement) { hoveredElement.classList.remove("frontend-snipper-hovered"); hoveredElement = null; }
+      if (window.FrontendSnipperUI) window.FrontendSnipperUI.hideHoverInfo();
       return;
     }
     if (hoveredElement !== target) {
       if (hoveredElement) hoveredElement.classList.remove("frontend-snipper-hovered");
       hoveredElement = target;
       hoveredElement.classList.add("frontend-snipper-hovered");
+
+      // Show live locator details near the cursor (DevTools-style).
+      if (window.FrontendSnipperUI && target.nodeType === 1) {
+        let rect = { width: 0, height: 0 };
+        try { rect = target.getBoundingClientRect(); } catch (e) {}
+        const dims = Math.round(rect.width) + " × " + Math.round(rect.height);
+        window.FrontendSnipperUI.updateHoverInfo(getElementDescriptor(target), dims, event.clientX, event.clientY);
+      }
     }
+  }
+
+  // Keep the tooltip following the cursor between element changes.
+  function handleMouseTrack(event) {
+    if (!isInspectActive) return;
+    if (event.target.closest && event.target.closest("#frontend-snipper-sidebar-root")) return;
+    if (window.FrontendSnipperUI) window.FrontendSnipperUI.moveHoverInfo(event.clientX, event.clientY);
   }
 
   function startInspecting() {
     isInspectActive = true;
     document.body.classList.add("frontend-snipper-inspecting");
     document.addEventListener("mouseover", handleMouseMove);
+    document.addEventListener("mousemove", handleMouseTrack, true);
     document.addEventListener("click", selectElement, true);
   }
 
@@ -338,8 +741,12 @@
     document.body.classList.remove("frontend-snipper-inspecting");
     if (hoveredElement) { hoveredElement.classList.remove("frontend-snipper-hovered"); hoveredElement = null; }
     document.removeEventListener("mouseover", handleMouseMove);
+    document.removeEventListener("mousemove", handleMouseTrack, true);
     document.removeEventListener("click", selectElement, true);
-    if (window.FrontendSnipperUI) window.FrontendSnipperUI.stopInspect();
+    if (window.FrontendSnipperUI) {
+      window.FrontendSnipperUI.hideHoverInfo();
+      window.FrontendSnipperUI.stopInspect();
+    }
   }
 
   function handleFullPageSnip() {

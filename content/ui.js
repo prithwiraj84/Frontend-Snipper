@@ -13,9 +13,11 @@
   let isInspectActive = false;
   let snippedHtml = '';
   let snippedCss = '';
-  let activeTab = 'html'; // 'html' or 'css'
+  let activeTab = 'html'; // 'html' | 'css' | 'selectors'
   let currentTagName = '';
   let activeMode = 'element'; // 'element' or 'fullpage'
+  let snippedSelectors = []; // [{ label, value }] locator details for the Selectors tab
+  let hoverTip = null;       // live on-page locator tooltip element (lives in the shadow root)
 
   // Core CSS for Shadow DOM UI
   const shadowStyles = `
@@ -434,6 +436,136 @@
       border-color: transparent !important;
     }
 
+    /* Selectors (XPath / CSS / locators) view */
+    .selectors-view {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      background-color: #0A0B0F;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 12px;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .sel-group-title {
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: #4FACFE;
+      padding: 10px 4px 2px;
+      position: sticky;
+      top: -8px;
+      background-color: #0A0B0F;
+      z-index: 1;
+    }
+
+    .sel-group-title:first-child {
+      padding-top: 2px;
+    }
+
+    .sel-row {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+      padding: 8px 10px;
+    }
+
+    .sel-row-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+
+    .sel-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.6px;
+      text-transform: uppercase;
+      color: #00F2FE;
+    }
+
+    .sel-copy {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: #A0AEC0;
+      font-size: 9.5px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .sel-copy:hover {
+      background: linear-gradient(135deg, #00F2FE 0%, #4FACFE 100%);
+      color: #0A0B0F;
+      border-color: transparent;
+    }
+
+    .sel-copy.success {
+      background: #10B981 !important;
+      color: #FFFFFF !important;
+      border-color: transparent !important;
+    }
+
+    .sel-value {
+      font-family: 'Fira Code', 'Courier New', monospace;
+      font-size: 11px;
+      line-height: 1.5;
+      color: #CBD5E0;
+      word-break: break-all;
+      white-space: pre-wrap;
+      user-select: text;
+    }
+
+    .sel-empty {
+      color: #718096;
+      font-size: 12px;
+      text-align: center;
+      padding: 24px;
+    }
+
+    /* Live on-page locator tooltip */
+    .fs-hover-tip {
+      position: fixed;
+      z-index: 2147483647;
+      display: none;
+      align-items: center;
+      gap: 10px;
+      max-width: 380px;
+      background-color: rgba(10, 11, 15, 0.96);
+      border: 1px solid rgba(0, 242, 254, 0.45);
+      border-radius: 7px;
+      padding: 6px 11px;
+      font-family: 'Fira Code', 'Courier New', monospace;
+      font-size: 11px;
+      line-height: 1.4;
+      color: #E2E8F0;
+      pointer-events: none;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+      white-space: nowrap;
+      overflow: hidden;
+    }
+
+    .fs-tip-sel {
+      color: #00F2FE;
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .fs-tip-dim {
+      color: #718096;
+      flex-shrink: 0;
+    }
+
     /* Footer */
     .panel-footer {
       padding: 20px;
@@ -649,10 +781,11 @@
             <div class="tabs">
               <button class="tab active" id="fs-tab-html">HTML</button>
               <button class="tab" id="fs-tab-css">CSS</button>
+              <button class="tab" id="fs-tab-selectors">Selectors</button>
             </div>
           </div>
 
-          <div class="code-container">
+          <div class="code-container" id="fs-code-container">
             <button class="btn-copy" id="fs-btn-copy">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
@@ -662,6 +795,9 @@
             </button>
             <textarea class="code-area" id="fs-code-area" readonly></textarea>
           </div>
+
+          <!-- XPath / CSS selector / id / attribute details -->
+          <div class="selectors-view" id="fs-selectors-view" style="display: none;"></div>
         </div>
       </div>
 
@@ -745,6 +881,10 @@
       switchTab('css');
     });
 
+    shadowRoot.getElementById('fs-tab-selectors').addEventListener('click', () => {
+      switchTab('selectors');
+    });
+
     shadowRoot.getElementById('fs-btn-copy').addEventListener('click', () => {
       copyToClipboard();
     });
@@ -826,23 +966,123 @@
     window.dispatchEvent(new CustomEvent('frontend-snipper-fullpage'));
   };
 
-  // Switch between HTML and CSS tabs
+  // Escape text for safe innerHTML insertion.
+  const escapeHtml = (s) => String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+  // Switch between HTML / CSS / Selectors tabs
   const switchTab = (tab) => {
     activeTab = tab;
     const tabHtml = shadowRoot.getElementById('fs-tab-html');
     const tabCss = shadowRoot.getElementById('fs-tab-css');
+    const tabSel = shadowRoot.getElementById('fs-tab-selectors');
+    const codeContainer = shadowRoot.getElementById('fs-code-container');
+    const selView = shadowRoot.getElementById('fs-selectors-view');
     const codeArea = shadowRoot.getElementById('fs-code-area');
 
-    if (tab === 'html') {
-      tabHtml.classList.add('active');
-      tabCss.classList.remove('active');
-      codeArea.value = snippedHtml;
-    } else {
-      tabHtml.classList.remove('active');
-      tabCss.classList.add('active');
+    [tabHtml, tabCss, tabSel].forEach((t) => { if (t) t.classList.remove('active'); });
+
+    if (tab === 'selectors') {
+      if (tabSel) tabSel.classList.add('active');
+      if (codeContainer) codeContainer.style.display = 'none';
+      if (selView) selView.style.display = 'flex';
+      renderSelectors(snippedSelectors);
+      return;
+    }
+
+    if (codeContainer) codeContainer.style.display = 'flex';
+    if (selView) selView.style.display = 'none';
+    if (tab === 'css') {
+      if (tabCss) tabCss.classList.add('active');
       codeArea.value = snippedCss;
+    } else {
+      if (tabHtml) tabHtml.classList.add('active');
+      codeArea.value = snippedHtml;
     }
   };
+
+  // Render grouped locator details [{ title, rows: [{ label, value }] }], each row copyable.
+  const renderSelectors = (groups) => {
+    const view = shadowRoot.getElementById('fs-selectors-view');
+    if (!view) return;
+    if (!groups || !groups.length) {
+      view.innerHTML = '<div class="sel-empty">No selector details available.</div>';
+      return;
+    }
+
+    const flat = []; // values indexed for the copy buttons
+    let html = '';
+    groups.forEach((g) => {
+      if (!g.rows || !g.rows.length) return;
+      html += '<div class="sel-group-title">' + escapeHtml(g.title) + '</div>';
+      g.rows.forEach((r) => {
+        const idx = flat.length;
+        flat.push(r.value);
+        html +=
+          '<div class="sel-row">' +
+            '<div class="sel-row-head">' +
+              '<span class="sel-label">' + escapeHtml(r.label) + '</span>' +
+              '<button class="sel-copy" data-idx="' + idx + '">Copy</button>' +
+            '</div>' +
+            '<div class="sel-value">' + escapeHtml(r.value) + '</div>' +
+          '</div>';
+      });
+    });
+    view.innerHTML = html;
+
+    view.querySelectorAll('.sel-copy').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const val = flat[parseInt(btn.getAttribute('data-idx'), 10)] || '';
+        navigator.clipboard.writeText(val).then(() => {
+          btn.textContent = 'Copied';
+          btn.classList.add('success');
+          setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('success'); }, 1200);
+        }).catch((err) => console.error('Copy failed:', err));
+      });
+    });
+  };
+
+  // -------- Live on-page locator tooltip --------
+
+  const ensureHoverTip = () => {
+    if (hoverTip && shadowRoot && shadowRoot.contains(hoverTip)) return hoverTip;
+    hoverTip = document.createElement('div');
+    hoverTip.className = 'fs-hover-tip';
+    hoverTip.style.display = 'none';
+    if (shadowRoot) shadowRoot.appendChild(hoverTip);
+    return hoverTip;
+  };
+
+  const positionHoverTip = (x, y) => {
+    if (!hoverTip) return;
+    const pad = 14;
+    const w = hoverTip.offsetWidth || 220;
+    const h = hoverTip.offsetHeight || 30;
+    let left = x + pad;
+    let top = y + pad;
+    if (left + w > window.innerWidth) left = x - w - pad;
+    if (top + h > window.innerHeight) top = y - h - pad;
+    if (left < 4) left = 4;
+    if (top < 4) top = 4;
+    hoverTip.style.left = left + 'px';
+    hoverTip.style.top = top + 'px';
+  };
+
+  const updateHoverInfo = (descriptor, dims, x, y) => {
+    if (!shadowRoot) return;
+    const tip = ensureHoverTip();
+    tip.innerHTML = '<span class="fs-tip-sel">' + escapeHtml(descriptor) + '</span>' +
+      (dims ? '<span class="fs-tip-dim">' + escapeHtml(dims) + '</span>' : '');
+    tip.style.display = 'flex';
+    positionHoverTip(x, y);
+  };
+
+  const moveHoverInfo = (x, y) => {
+    if (hoverTip && hoverTip.style.display !== 'none') positionHoverTip(x, y);
+  };
+
+  const hideHoverInfo = () => { if (hoverTip) hoverTip.style.display = 'none'; };
 
   // Copy code area content to clipboard
   const copyToClipboard = () => {
@@ -901,9 +1141,13 @@
     },
     showLoading: showLoading,
     hideLoading: hideLoading,
-    updatePreview: (html, css, tagName, childCount) => {
+    updateHoverInfo: updateHoverInfo,
+    moveHoverInfo: moveHoverInfo,
+    hideHoverInfo: hideHoverInfo,
+    updatePreview: (html, css, tagName, childCount, selectorDetails) => {
       snippedHtml = html;
       snippedCss = css;
+      snippedSelectors = selectorDetails || [];
       currentTagName = tagName.toLowerCase();
 
       // Ensure loader is hidden
@@ -912,13 +1156,13 @@
       // Update UI elements
       shadowRoot.getElementById('fs-empty-state').style.display = 'none';
       shadowRoot.getElementById('fs-preview-section').style.display = 'flex';
-      
+
       const tagBadge = shadowRoot.getElementById('fs-meta-tag');
       tagBadge.textContent = currentTagName;
 
       const metaInfo = shadowRoot.getElementById('fs-meta-info');
       metaInfo.textContent = `${childCount} child element${childCount === 1 ? '' : 's'}`;
-      
+
       // Enable download button
       shadowRoot.getElementById('fs-download-zip').removeAttribute('disabled');
 
