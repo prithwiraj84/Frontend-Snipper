@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Frontend Snipper",
   "version": "2.0.0",
-  "description": "Snip any DOM element with pixel-perfect computed CSS, fonts, keyframes and embedded assets, then download it as a self-contained ZIP archive.",
+  "description": "Snip any DOM element with its full computed styles, fonts, and assets into a self-contained ZIP file.",
   "author": "Prithwiraj",
   "permissions": [
     "activeTab",
